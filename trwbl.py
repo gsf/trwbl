@@ -44,11 +44,11 @@ class Field(object):
     """
     The second very most important class in trwbl.
     """
-    def __init__(self, name, value):
+    def __init__(self, name, value, store=True, tokenize=True):
         self.name = name
         self.value = value
-        self.store = True
-        self.tokenize = True
+        self.store = store
+        self.tokenize = tokenize
 
     def __str__(self):
         return self.name
