@@ -23,10 +23,11 @@ keywords: Troll
 >>> d2.add(Field('author', 'Horrible Masterson'))
 >>> d2.add(Field('keywords', 'baby'))
 >>> d2.add(Field('keywords', 'soup'))
->>> for token_field_obj in d2.tokenize():
-...     for token in token_field_obj:
-...          if token.value == 'soup':
-...              print token_field_obj
+>>> d2.tokenize()
+>>> for field_name in d2.token_fields:
+...     for token_value in d2.token_fields[field_name]:
+...          if token_value == 'soup':
+...              print field_name
 ...
 keywords
 >>> f = 'indie_test'
@@ -83,7 +84,11 @@ class TokenField(object):
     """
     def __init__(self, name):
         self.name = name
-        self.tokens = []
+        # self.tokens will be a {token_value: [token0, token1]} dict
+        self.tokens = {}
+
+#    def __getitem__(self, key):
+#        return self.tokens[key]
 
     def __iter__(self):
         for token in self.tokens:
@@ -91,6 +96,12 @@ class TokenField(object):
 
     def __str__(self):
         return self.name
+
+#    def get(self, key):
+#        try:
+#            return self.tokens[key]
+#        except KeyError:
+#            return ''
 
 class Document(object):
     """
@@ -121,27 +132,39 @@ class Document(object):
     #            -- token value -- doc, position
     #                           -- doc, position
     def tokenize(self):
-        token_fields = []
+        self.token_fields = {}
         #tokens = []
         #values = []
         for field in self.fields:
             # TODO: replace split() with an re findall()
-            # that drops punctuation and lowercases
+            # that drops punctuation and lowercases --
+            # also, below needs to be fixed because as it stands
+            # the same token from multiple assignments to the same
+            # field could have the exact same document & position
+            # -- either words from multiple assignments to the same
+            # field need to be appended before tokenizing or 
+            # tokens need a record of distinct assignments
             if field.tokenize == True:
-                tf = TokenField(field.name)
+                try:
+                    tf = self.token_fields[field.name]
+                except KeyError:
+                    tf = TokenField(field.name)
                 words = field.value.split()
                 for position in xrange(len(words)):
                     value = words[position].lower()
                     t = Token(value, position) 
-                    tf.tokens.append(t)
-                token_fields.append(tf)
+                    if tf.tokens.get(value):
+                        tf.tokens[value].append(t)
+                    else:
+                        tf.tokens[value] = [t]
+                self.token_fields[field.name] = tf
         # wait to implement frequency
 #                    values.append(t.value)
 #        for position in xrange(len(values)):
 #            count = values.count(values[position])
 #            frequency = float(count) / len(values)
 #            tokens[position].frequency = frequency
-        return token_fields
+        #return token_fields
 
 class Index(object):
     """
@@ -157,28 +180,30 @@ class Index(object):
             pickle_file.close()
         else:
             self.documents = []
-            self.token_fields = []
+            self.token_fields = {}
 
     def add(self, document):
-        document_token_fields = document.tokenize()
+        document.tokenize()
         # TODO: strip unstored fields from document
         self.documents.append(document)
-        for document_token_field in document_token_fields:
+        for field_name in document.token_fields:
             # grab document position from the document's position in
             # the index's list of documents
+            # this is pretty fragile -- assign a document.id instead?
             doc_position = len(self.documents) - 1
-            for token in document_token_field:
-                token.document = doc_position
+            for token_value in document.token_fields[field_name]:
+                for token in document.token_fields[field_name].tokens[token_value]:
+                    token.document = doc_position
             # if a token_field of the same name already exists in the
             # index, append this field's tokens to it
-            if document_token_field.name in (tf.name for tf 
-                    in self.token_fields):
-                for index_token_field in self.token_fields:
-                    if index_token_field.name == document_token_field.name:
-                        for token in document_token_field:
-                            index_token_field.tokens.append(token)
+            if self.token_fields.get(field_name):
+                for token_value in document.token_fields[field_name]:
+                    if not self.token_fields[field_name].tokens.get(token_value):
+                        self.token_fields[field_name].tokens[token_value] = []
+                    for token in document.token_fields[field_name].tokens[token_value]:
+                        self.token_fields[field_name].tokens[token_value].append(token)
             else:
-                self.token_fields.append(document_token_field)
+                self.token_fields[field_name] = document.token_fields[field_name]
 
     def save(self):
         pickle_file = open(self.pickle_filename, 'wb')
@@ -187,14 +212,13 @@ class Index(object):
         pickle_file.close()
 
     def search(self, query):
-        # TODO: parse query
+        # TODO: parse query (field_name is temporary)
+        field_name = 'keywords'
         documents = []
-        for token_field in self.token_fields:
-            if token_field.name == 'keywords':
-                for token in token_field:
-                    if token.value == query:
-                        hit = self.documents[token.document]
-                        documents.append(hit)
+        if self.token_fields[field_name].tokens.get(query):
+            for token in self.token_fields[field_name].tokens[query]:
+                hit = self.documents[token.document]
+                documents.append(hit)
         return documents
 
 def _test():
