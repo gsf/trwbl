@@ -44,9 +44,20 @@ Hoopdie McGee
 class Field(object):
     """
     The second very most important class in trwbl.
+
+    >>> field = Field()
+    Traceback (most recent call last):
+      File "<stdin>", line 1, in ?
+    TypeError: __init__() takes at least 3 arguments (1 given)
+    >>> field = Field('title', 'The Stranger')
+    >>> print field
+    title
     """
     def __init__(self, name, value, store=True, tokenize=True):
         self.name = name
+        # value can be a string or list
+        # no, on second thought, value is always a string (unicode?)
+        # I'd rather multiple fields than lists as values
         self.value = value
         self.store = store
         self.tokenize = tokenize
@@ -61,6 +72,7 @@ class Token(object):
     """
     def __init__(self, value, position, field):
         self.value = value
+        # position is position within the field
         self.position = position
         # field points at field position in the document --
         # differentiates between different fields of the same name
@@ -102,9 +114,19 @@ class TokenField(object):
 
 class Document(object):
     """
-    The most very important class in trwbl.
+    The most very important class in trwbl.  Fields are stored as a 
+    dictionary.  If more than one value is registered for the same key,
+    those values are stored in a list associated with that key.
+
+    >>> d = Document(title='Born Sober', 
+    ...         author=['Jake Mahoney', 'Sewell Littletrout'])
+    >>> d['title']
+    'Born Sober'
+    >>> d['author']
+    ['Jake Mahoney', 'Sewell Littletrout']
     """
     def __init__(self, **kwargs):
+        self.field_dict = {}
         self.fields = []
         self.add(**kwargs)
 
@@ -112,14 +134,32 @@ class Document(object):
         for field in self.fields:
             yield field
 
+    def __getitem__(self, key):
+        if len(self.field_dict[key]) > 1:
+            value_list = []
+            for ref in self.field_dict[key]:
+                value_list.append(self.fields[ref].value)
+            return value_list
+        else:
+            return self.fields[self.field_dict[key][0]].value
+
     def add(self, **kwargs):
-        for key in kwargs:
-            if type(kwargs[key]) == type(tuple()) or \
-                    type(kwargs[key]) == type(list()):
-                for value in kwargs[key]:
-                    self.fields.append(Field(key, value))
+        def field_append(key, value):
+            self.fields.append(Field(key, value))
+            # store reference to field list position
+            # in self.field_dict
+            # XXX: i think there's a slicker way to do this
+            # with python dicts
+            if self.field_dict.has_key(key):
+                self.field_dict[key].append(len(self.fields)-1)
             else:
-                self.fields.append(Field(key, kwargs[key]))
+                self.field_dict[key] = [len(self.fields)-1]
+        for key in kwargs:
+            if isinstance(kwargs[key], (tuple, list)):
+                for value in kwargs[key]:
+                    field_append(key, value)
+            else:
+                field_append(key, kwargs[key])
 
     def tokenize(self):
         self.token_fields = {}
@@ -135,7 +175,7 @@ class Document(object):
             # -- either words from multiple value assignments to the 
             # same field need to be appended before tokenizing or 
             # tokens need a record of distinct assignments
-            # XXX: answer -- added field attribute
+            # XXX: answer -- added field attribute to Token
             field = self.fields[field_position]
             if field.tokenize == True:
                 try:
