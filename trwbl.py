@@ -11,7 +11,7 @@ Example
 3
 >>> for field in d:
 ...     if field.name == 'author':
-...          print '%s: %s' % (field, field.value)
+...          print '%s: %s' % (field.name, field.value)
 ...
 author: Eleanor McGearyson
 >>> d2 = Document(title='Hoopdie McGee',
@@ -32,7 +32,7 @@ keywords
 >>> indie_dump = indie.dump()
 >>> new_indie = Index()
 >>> new_indie.load(indie_dump)
->>> doc_list = new_indie.search('baby')
+>>> doc_list = new_indie.search('baby', field='keywords')
 >>> for doc in doc_list:
 ...     for field in doc:
 ...         if field.name == 'title':
@@ -40,6 +40,8 @@ keywords
 ...
 Hoopdie McGee
 """
+
+import re
 
 class Field(object):
     """
@@ -50,7 +52,7 @@ class Field(object):
       File "<stdin>", line 1, in ?
     TypeError: __init__() takes at least 3 arguments (1 given)
     >>> field = Field('title', 'The Stranger')
-    >>> print field
+    >>> print field.name
     title
     """
     def __init__(self, name, value, store=True, tokenize=True):
@@ -62,13 +64,13 @@ class Field(object):
         self.store = store
         self.tokenize = tokenize
 
-    def __str__(self):
-        return self.name
-
 class Token(object):
     """
     The smallest being in trwbl's reality, akin to a "word".  
     Really quite close to the center of trwbl's functionality.
+    >>> t = Token('bob', 0, 0)
+    >>> print t
+    bob
     """
     def __init__(self, value, position, field):
         self.value = value
@@ -162,35 +164,32 @@ class Document(object):
                 field_append(key, kwargs[key])
 
     def tokenize(self):
+        re_tokens = re.compile(r'[^.,\s]+')
         self.token_fields = {}
         #tokens = []
         #values = []
-        for field_position in xrange(len(self.fields)):
-            # TODO: replace split() with an re findall()
-            # that drops punctuation and lowercases --
-
-            # also, below needs to be fixed because as it stands
+        for field_position, field in enumerate(self.fields):
+            # below needs to be fixed because as it stands
             # the same token from multiple values assigned to the same
             # field could have the exact same document & position
-            # -- either words from multiple value assignments to the 
+            # -- either tokens from multiple value assignments to the 
             # same field need to be appended before tokenizing or 
             # tokens need a record of distinct assignments
             # XXX: answer -- added field attribute to Token
-            field = self.fields[field_position]
             if field.tokenize == True:
                 try:
-                    tf = self.token_fields[field.name]
+                    token_field = self.token_fields[field.name]
                 except KeyError:
-                    tf = TokenField(field.name)
-                words = field.value.split()
-                for token_position in xrange(len(words)):
-                    value = words[token_position].lower()
-                    t = Token(value, token_position, field_position)
-                    if tf.tokens.get(value):
-                        tf.tokens[value].append(t)
+                    token_field = TokenField(field.name)
+                token_values = re_tokens.findall(field.value)
+                for token_position, value in enumerate(token_values):
+                    value = value.lower()
+                    token = Token(value, token_position, field_position)
+                    if token_field.tokens.get(value):
+                        token_field.tokens[value].append(token)
                     else:
-                        tf.tokens[value] = [t]
-                self.token_fields[field.name] = tf
+                        token_field.tokens[value] = [token]
+                self.token_fields[field.name] = token_field
 
         # wait to implement frequency
 #                    values.append(t.value)
@@ -286,14 +285,15 @@ class Index(object):
         full_index.append(token_fields)
         return full_index
 
-    def search(self, query):
-        # TODO: parse query (field_name is temporary)
-        field_name = 'keywords'
+    def search(self, query, field='text'):
+        
+        re_query = re.compile(r'')
         documents = []
-        if self.token_fields[field_name].tokens.get(query):
-            for token in self.token_fields[field_name].tokens[query]:
+        if self.token_fields[field].tokens.get(query):
+            for token in self.token_fields[field].tokens[query]:
                 hit = self.documents[token.document]
-                documents.append(hit)
+                if hit not in documents:
+                    documents.append(hit)
         return documents
 
 def _test():
