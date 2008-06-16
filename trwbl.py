@@ -4,31 +4,31 @@ of small documents.
 
 Example
 -------
->>> d = Document(title='The Troll Mountain',
+>>> doc = Document(title='The Troll Mountain',
 ... author='Eleanor McGearyson',
 ... keywords='Troll')
 >>> len(d.fields)
 3
->>> for field in d:
+>>> for field in doc:
 ...     if field.name == 'author':
 ...          print '%s: %s' % (field.name, field.value)
 ...
 author: Eleanor McGearyson
->>> d2 = Document(title='Hoopdie McGee',
+>>> doc2 = Document(title='Hoopdie McGee',
 ... author='Horrible Masterson',
 ... keywords=('baby', 'soup'))
->>> d2.tokenize()
->>> d2.token_fields['keywords']['soup'][0].field
+>>> doc2.tokenize()
+>>> doc2.token_fields['keywords']['soup'][0].field
 1
->>> for field_name in d2.token_fields:
-...     for token_value in d2.token_fields[field_name]:
+>>> for field_name in doc2.token_fields:
+...     for token_value in doc2.token_fields[field_name]:
 ...          if token_value == 'soup':
 ...              print field_name
 ...
 keywords
 >>> indie = Index()
->>> indie.add(d)
->>> indie.add(d2)
+>>> indie.add(doc)
+>>> indie.add(doc2)
 >>> indie_dump = indie.dump()
 >>> new_indie = Index()
 >>> new_indie.load(indie_dump)
@@ -41,12 +41,11 @@ keywords
 Hoopdie McGee
 """
 
+import pickle
 import re
 
 class Field(object):
     """
-    The second very most important class in trwbl.
-
     >>> field = Field()
     Traceback (most recent call last):
       File "<stdin>", line 1, in ?
@@ -55,7 +54,7 @@ class Field(object):
     >>> print field.name
     title
     """
-    def __init__(self, name, value, store=True, tokenize=True):
+    def __init__(self, name, value, index=True, store=True, tokenize=True):
         self.name = name
         # value can be a string or list
         # no, on second thought, value is always a string (unicode?)
@@ -63,11 +62,11 @@ class Field(object):
         self.value = value
         self.store = store
         self.tokenize = tokenize
+        self.index = index
 
 class Token(object):
     """
     The smallest being in trwbl's reality, akin to a "word".  
-    Really quite close to the center of trwbl's functionality.
     >>> t = Token('bob', 0, 0)
     >>> print t
     bob
@@ -88,48 +87,40 @@ class Token(object):
     def __str__(self):
         return self.value
 
-class TokenField(object):
+class IndexedField(object):
     """
-    A container full of tokens for a given field.  Surprisingly 
-    necessary for the success of trwbl.
+    An index of values for a given field. 
     """
     def __init__(self, name):
         self.name = name
-        # self.tokens will be a {token_value: [token0, token1]} dict
-        self.tokens = {}
+        # self.values will be {value: [position0, position1, ...]}
+        self.values = {}
 
     def __getitem__(self, key):
-        return self.tokens[key]
+        return self.values[key]
 
     def __iter__(self):
-        for token in self.tokens:
-            yield token
+        for value in self.values:
+            yield value
 
     def __str__(self):
         return self.name
 
-#    def get(self, key):
-#        try:
-#            return self.tokens[key]
-#        except KeyError:
-#            return ''
-
 class Document(object):
     """
-    The most very important class in trwbl.  Fields are stored as a 
-    dictionary.  If more than one value is registered for the same key,
-    those values are stored in a list associated with that key.
+    Fields are stored as a dictionary of lists.
 
     >>> d = Document(title='Born Sober', 
     ...         author=['Jake Mahoney', 'Sewell Littletrout'])
     >>> d['title']
-    'Born Sober'
+    ['Born Sober']
     >>> d['author']
     ['Jake Mahoney', 'Sewell Littletrout']
     """
     def __init__(self, **kwargs):
-        self.field_dict = {}
+        #self.field_dict = {}
         self.fields = []
+        self.indexed_fields = {}
         self.add(**kwargs)
 
     def __iter__(self):
@@ -137,35 +128,34 @@ class Document(object):
             yield field
 
     def __getitem__(self, key):
-        if len(self.field_dict[key]) > 1:
-            value_list = []
-            for ref in self.field_dict[key]:
-                value_list.append(self.fields[ref].value)
-            return value_list
-        else:
-            return self.fields[self.field_dict[key][0]].value
+        value_list = []
+        for ref in self.field_dict[key]:
+            value_list.append(self.fields[ref].value)
+        return value_list
 
     def add(self, **kwargs):
-        def field_append(key, value):
-            self.fields.append(Field(key, value))
-            # store reference to field list position
-            # in self.field_dict
-            # XXX: i think there's a slicker way to do this
-            # with python dicts
-            if self.field_dict.has_key(key):
-                self.field_dict[key].append(len(self.fields)-1)
-            else:
-                self.field_dict[key] = [len(self.fields)-1]
-        for key in kwargs:
-            if isinstance(kwargs[key], (tuple, list)):
-                for value in kwargs[key]:
-                    field_append(key, value)
-            else:
-                field_append(key, kwargs[key])
+        self.fields.append(Field(key, value))
+        # handle all of this in indexed_fields
+        #def field_append(key, value):
+        #    self.fields.append(Field(key, value))
+        #    # store reference to field list position in self.field_dict
+        #    # XXX: i think there's a slicker way to do this
+        #    # with python dicts
+        #    if key in self.field_dict:
+        #        self.field_dict[key].append(len(self.fields)-1)
+        #    else:
+        #        self.field_dict[key] = [len(self.fields)-1]
+        #for key in kwargs:
+        #    if isinstance(kwargs[key], (tuple, list)):
+        #        for value in kwargs[key]:
+        #            field_append(key, value)
+        #    else:
+        #        field_append(key, kwargs[key])
 
-    def tokenize(self):
-        re_tokens = re.compile(r'[^.,\s]+')
-        self.token_fields = {}
+    def index(self):
+        "Index the fields in the document."
+        # tokenizing particulars should be extracted into Tokenizer class
+        tokens_re = re.compile(r'[^.,\s]+')
         #tokens = []
         #values = []
         for field_position, field in enumerate(self.fields):
@@ -176,20 +166,21 @@ class Document(object):
             # same field need to be appended before tokenizing or 
             # tokens need a record of distinct assignments
             # XXX: answer -- added field attribute to Token
-            if field.tokenize == True:
+            if field.index:
                 try:
-                    token_field = self.token_fields[field.name]
+                    indexed_field = self.indexed_fields[field.name]
                 except KeyError:
-                    token_field = TokenField(field.name)
-                token_values = re_tokens.findall(field.value)
-                for token_position, value in enumerate(token_values):
-                    value = value.lower()
-                    token = Token(value, token_position, field_position)
-                    if token_field.tokens.get(value):
-                        token_field.tokens[value].append(token)
-                    else:
-                        token_field.tokens[value] = [token]
-                self.token_fields[field.name] = token_field
+                    indexed_field = IndexedField(field.name)
+                if field.tokenize:
+                    token_values = tokens_re.findall(field.value)
+                    for position, value in enumerate(token_values):
+                        value = value.lower()
+                        token = Token(value, position, field_position)
+                if indexed_field.get(value):
+                    indexed_field[value].append(indexed)
+                else:
+                    indexed_field[value] = [indexed]
+                self.indexed_fields[field.name] = indexed_field
 
         # wait to implement frequency
 #                    values.append(t.value)
@@ -201,7 +192,7 @@ class Document(object):
 
 class Collection(object):
     """
-    Simply a list of documents.  Useful?  trwbl thinks so.
+    Simply a list of documents. 
     """
     pass
 
@@ -209,9 +200,13 @@ class Index(object):
     """
     Very nearly the most important class in trwbl.
     """
-    def __init__(self):
-        self.documents = []
-        self.token_fields = {}
+    def __init__(self, filename=None):
+        if filename:
+            self.open(filename)
+        else:
+            self.documents = []
+            self.fields = {}
+            self.token_fields = {}
 
     def add(self, document):
         # TODO: strip unstored fields from document
@@ -265,9 +260,16 @@ class Index(object):
 
     def load(self, dumped_index):
         self.documents, self.token_fields = dumped_index
+
+    def open(self, filename):
+        index_handle = open(filename, 'rb')
+        try:
+            self.load(pickle.load(index_handle))
+        finally:
+            index_handle.close()
     
     def output(self):
-        'outputs the index as a structure of lists and dictionaries'
+        'Outputs the index as a structure of lists and dictionaries.'
         documents = []
         for document in self.documents:
             document_fields = []
@@ -285,9 +287,15 @@ class Index(object):
         full_index.append(token_fields)
         return full_index
 
+    def save(self, filename):
+        index_handle = open(filename, 'wb')
+        try:
+            pickle.dump(self.dump(), index_handle, -1)
+        finally:
+            index_handle.close()
+
     def search(self, query, field='text'):
-        
-        re_query = re.compile(r'')
+        query_re = re.compile(r'')
         documents = []
         if self.token_fields[field].tokens.get(query):
             for token in self.token_fields[field].tokens[query]:
