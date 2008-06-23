@@ -63,6 +63,39 @@ import re
 class IndexException(Exception):
     pass
 
+POWER_SEARCH_RE = re.compile(r"""
+".+?"|         # ignore anything surrounded by quotes
+(
+  (?:
+    [+-]?      # grab an optional + or -
+    [\w]+:     # then a word with a colon
+  )
+  (?:
+    ".+?"|     # then anything surrounded by quotes 
+    \(.+?\)|   # or parentheses
+    \[.+?\]|   # or brackets,
+    [\S]+      # or non-whitespace strings
+  )
+)
+""", re.VERBOSE | re.UNICODE)
+def pull_power(query):
+    """
+    Pulls "power search" parts out of the query.  It returns
+    (1) the query without those parts and (2) a list of those parts.
+
+    >>> query = 'title:"tar baby" "the book:an adventure" +author:john'
+    >>> pull_power(query)
+    (' "the book:an adventure" ', ['title:"tar baby"', '+author:john'])
+    >>> 
+    """
+    power_list = POWER_SEARCH_RE.findall(query)
+    # drop empty strings
+    power_list = [x for x in power_list if x] 
+    # escape for re
+    escaped_power = [re.escape(x) for x in power_list]
+    powerless_query = re.sub('|'.join(escaped_power), '', query)
+    return powerless_query, power_list
+
 class Tokenizer(object):
     def __init__(self, lower=True, re_string=r'[\w\']+'):
         self.lower = lower
@@ -85,7 +118,6 @@ class Field(object):
         self.copy_to = copy_to
         self.weight = weight
         self.tokenizer = tokenizer
-        # self.tokens will be {token_value: [Token, ...], ...}
         self.tokens = ListsDict()
 
     def __getitem__(self, key):
@@ -98,25 +130,31 @@ class Field(object):
     def __str__(self):
         return self.name
 
-    def add(self, field_values, doc_position):
+    def add(self, field_values, document_position):
         for field_position, field_value in enumerate(field_values):
             token_values = self.tokenizer.tokenize(field_value)
-            for position, value in enumerate(token_values):
-                token = TokenPosition(position, field_position, doc_position)
-                self.tokens[value] = token
+            for string_position, value in enumerate(token_values):
+                self.tokens[value] = TokenLocation(string_position, 
+                        field_position, document_position)
 
-class TokenPosition(object):
+    def get_token_list(self):
+        """Get a list of tokens, sorted by popularity."""
+        decorated_token_list = [(-len(self.tokens[x]), x) for x in self.tokens]
+        decorated_token_list.sort()
+        return [(x[1], self.tokens[x[1]]) for x in decorated_token_list]
+
+class TokenLocation(object):
     """ """
-    def __init__(self, str, field, doc):
-        #self.value = value
-        self.str = str
+    def __init__(self, string, field, document):
+        # each of these are integer references to placement
+        self.string = string
         self.field = field
-        self.doc = doc
+        self.document = document
 
     def __str__(self):
-        return self.str
+        return self.string
 
-class IndexFields(dict):
+class IndexFieldDict(dict):
     def __init__(self, *args):
         self.add(*args)
 
@@ -143,7 +181,7 @@ class Index(object):
             self.open(filename)
         else:
             self.documents = []
-            self.fields = IndexFields()
+            self.fields = IndexFieldDict()
             self.weighted_fields = []
             for field in fields:
                 self.fields[field.name] = field
@@ -190,21 +228,27 @@ class Index(object):
             index_handle.close()
 
     def search(self, query):
-        query_re = re.compile(r'')
-        documents = []
-        for weight, field_name in self.weighted_fields:
-            try:
-                tokens = self.fields[field_name][query]
-            except KeyError:
-                tokens = []
-            for token in tokens:
-                document = self.documents[token.doc]
-                print "document: %s" % document.title
-                print "field: %s" % field_name 
-                print "position: %s" % token.str
-                print
-                if document not in documents:
-                    documents.append(document)
+        # TODO: handle quoted search and power searches
+        # TODO: score documents based on weighting, word proximity, and 
+        #       frequency
+        powerless_query, power_search = pull_power(query)
+        tokenizer = Tokenizer()
+        query_tokens = tokenizer.tokenize(powerless_query)
+        doc_set = set()
+        for query_token in query_tokens:
+            doc_list = []
+            for weight, field_name in self.weighted_fields:
+                try:
+                    tokens = self.fields[field_name][query_token]
+                except KeyError:
+                    tokens = []
+                for token in tokens:
+                    doc_list.append(token.document)
+            if doc_set:
+                doc_set = doc_set.intersection(doc_list)
+            else:
+                doc_set = set(doc_list)
+        documents = [self.documents[x] for x in doc_set]
         return documents
 
 class Document(object):
@@ -267,10 +311,13 @@ def _test():
 if __name__ == "__main__":
     _test()
 
-        # attempting to assign document IDs
-#        for field_name in document.fields:
-#            if field_name == unique_id:
-# How to set the document ID if none given?
+# XXX: Deleting/replacing documents is an expensive process, as far as I can
+# see it, because we would need to iterate over all of the tokens in
+# self.fields in order to remove those with that document ID. 
+# Only way to avoid that is to just leave the tokens and remove only the
+# document from self.documents, then put a try/except in search() to skip
+# hits on missing documents.  This might necessitate an optimize() method on 
+# the index.
 
 # for indexed fields across the index:
 # field name -- value -- doc, position (frequency to be added)
@@ -281,6 +328,12 @@ if __name__ == "__main__":
 # field name -- value -- doc, position
 #            -- value -- doc, position
 #                     -- doc, position
+
+
+        # attempting to assign document IDs
+#        for field_name in document.fields:
+#            if field_name == unique_id:
+# How to set the document ID if none given?
 
 #        for field_name in document.fields:
 #            # grab document position from the document's position in
@@ -319,14 +372,6 @@ if __name__ == "__main__":
 #        full_index.append(documents)
 #        full_index.append(fields)
 #        return full_index
-
-# XXX: Deleting/replacing documents is an expensive process, as far as I can
-# see it, because we would need to iterate over all of the tokens in
-# self.fields in order to remove those with that document ID. 
-# Only way to avoid that is to just leave the tokens and remove only the
-# document from self.documents, then put a try/except in search() to skip
-# hits on missing documents.  This might necessitate an optimize() method on 
-# the index.
 
 #        self.pickle_filename = pickle_filename
 #        if os.path.exists(pickle_filename):

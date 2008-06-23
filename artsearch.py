@@ -17,7 +17,7 @@ def create_index():
         Field('description', weight=0.6),
         Field('contents', store=False),
     ))
-    for article in glob('/home/gsf/svn/art/*'):
+    for article in glob('../art/*'):
         print "Adding %s ..." % article,
         file_handle = open(article)
         data = file_handle.read()
@@ -38,17 +38,24 @@ def search_index(query):
     index = Index('index')
     documents = index.search(query)
     for document in documents:
-        print document.title
+        print "%s %s" % (document.title, document['keywords'])
 
-def print_keywords():
+def get_tokens(field):
     index = Index('index')
-    for keyword in index.fields['keywords']:
-        print keyword
+    field = index.fields[field]
+    return field.get_token_list()
 
 if __name__ == '__main__':
-    if len(sys.argv) == 2:
-        print "Searching index ..."
-        search_index(sys.argv[1])
+    if len(sys.argv) > 2:
+        if sys.argv[1] == 'search':
+            print "Searching index ..."
+            search_index(sys.argv[2])
+        elif sys.argv[1] == 'tokens':
+            print "Tokens for %s:" % sys.argv[2]
+            tokens = get_tokens(sys.argv[2])
+            for token_value, token_locations in tokens:
+                print "\t %s (%s locations)" % (token_value, 
+                        len(token_locations))
     else:
         print "Creating index ..."
         create_index()

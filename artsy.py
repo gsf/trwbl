@@ -2,8 +2,8 @@
 
 import sys, os, glob, re, time
 from markdown import markdown
-from mako.template import Template
-from mako.lookup import TemplateLookup
+#from mako.template import Template
+#from mako.lookup import TemplateLookup
 
 def head_split(filestring):
     'Split the head from the contents.'
