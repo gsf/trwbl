@@ -136,7 +136,10 @@ class Field(object):
         else:
             field_values = [field_value]
         for field_position, field_value in enumerate(field_values):
-            token_values = self.tokenizer.tokenize(field_value)
+            if self.tokenizer:
+                token_values = self.tokenizer.tokenize(field_value)
+            else:
+                token_values = [field_value]
             for string_position, value in enumerate(token_values):
                 self.tokens[value] = TokenLocation(string_position, 
                         field_position, document_position)

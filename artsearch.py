@@ -8,12 +8,10 @@ import artsy
 def create_index():
     index = Index(fields=(
         Field('title', weight=0.8, copy_to='title_str'),
-        Field('title_str', store=False, weight=0.9, 
-            tokenizer=Tokenizer(re_string='.+', lower=False)),
+        Field('title_str', store=False, weight=0.9, tokenizer=None),
         Field('date', index=False),
         Field('keywords', weight=0.7, copy_to='keywords_str'),
-        Field('keywords_str', tokenizer=Tokenizer(re_string='.+',
-            lower=False)),
+        Field('keywords_str', tokenizer=None),
         Field('description', weight=0.6),
         Field('contents', store=False),
     ))
@@ -39,7 +37,6 @@ def search_index(query):
     documents = index.search(query)
     for document in documents:
         print "%s %s" % (document['title'], document['keywords'])
-        print document.position
 
 def get_tokens(field):
     index = Index('index')
