@@ -63,6 +63,23 @@ import re
 class IndexException(Exception):
     pass
 
+QUERY_RE = re.compile(r"""
+(".+?")      # anything surrounded by quotes
+|            # or
+([+-]?)      # grab an optional + or -
+([\w]+):     # then a word, then a colon 
+(
+  ".+?"|     # then anything surrounded by quotes 
+  [\S]+      # or non-whitespace strings
+)|           # or
+([+-]?)      # grab an optional + or -
+([\S]+)      # and non-whitespace strings without colons
+""", re.VERBOSE | re.UNICODE)
+def parse_query(query):
+    parsed = QUERY_RE.findall(query)
+    for part in parsed:
+        phrase, field_op, field, field_query, word_op, word = part
+
 POWER_SEARCH_RE = re.compile(r"""
 ".+?"|         # ignore anything surrounded by quotes
 (
@@ -83,7 +100,7 @@ def pull_power(query):
     Pulls "power search" parts out of the query.  It returns
     (1) the query without those parts and (2) a list of those parts.
 
-    >>> query = 'title:"tar baby" "the book:an adventure" +author:john'
+    >>> query = 'title:"tar baby" rabbit "the book:an adventure" -author:john'
     >>> pull_power(query)
     (' "the book:an adventure" ', ['title:"tar baby"', '+author:john'])
     >>> 
