@@ -118,7 +118,7 @@ class Field(object):
         self.copy_to = copy_to
         self.weight = weight
         self.tokenizer = tokenizer
-        self.tokens = ListsDict()
+        self.tokens = TokenDict()
 
     def __getitem__(self, key):
         return self.tokens[key]
@@ -130,7 +130,11 @@ class Field(object):
     def __str__(self):
         return self.name
 
-    def add(self, field_values, document_position):
+    def add(self, field_value, document_position):
+        if hasattr(field_value, '__iter__'):
+            field_values = field_value
+        else:
+            field_values = [field_value]
         for field_position, field_value in enumerate(field_values):
             token_values = self.tokenizer.tokenize(field_value)
             for string_position, value in enumerate(token_values):
@@ -155,9 +159,6 @@ class TokenLocation(object):
         return self.string
 
 class IndexFieldDict(dict):
-    def __init__(self, *args):
-        self.add(*args)
-
     def __getitem__(self, field_name):
         try:
             return dict.__getitem__(self, field_name)
@@ -169,10 +170,6 @@ class IndexFieldDict(dict):
             raise IndexException, "Field '%s' was defined twice." % field_name
         else:
             dict.__setitem__(self, field_name, field)
-                
-    def add(self, *args):
-        for field in args:
-            self[field.name] = field
     
 class Index(object):
     """ """
@@ -192,25 +189,23 @@ class Index(object):
 
     def add(self, document):
         self.documents.append(document)
-        doc_position = len(self.documents) - 1
+        document.position = len(self.documents) - 1
         for field in document:
             index_field = self.fields[field]
-            field_values = document[field]
+            field_value = document[field]
             if index_field.index:
-                index_field.add(field_values, doc_position)
+                index_field.add(field_value, document.position)
             if index_field.copy_to:
                 copy_field = self.fields[index_field.copy_to]
                 if copy_field.index:  # really, when would it not be?
-                    copy_field.add(field_values, doc_position)
+                    copy_field.add(field_value, document.position)
             if not self.fields[field].store:
-                document[field] = None
+                document[field] = None  # can't delete during loop
 
     def dump(self):
-        #return self.documents, self.fields
         return self.__dict__
 
     def load(self, dumped_index):
-        #self.documents, self.fields = dumped_index
         self.__dict__ = dumped_index
 
     def open(self, filename):
@@ -265,44 +260,33 @@ class Document(object):
     ['Jake Mahoney', 'Sewell Littletrout']
     """
     def __init__(self, **kwargs):
-        self.fields = ListsDict()
-        for key, value in kwargs.items():
-            self.__setitem__(key, value)
-
-    def __delitem__(self, field):
-        del self.fields[field]
+        self.fields = dict(**kwargs)
+        self.position = None
 
     def __getitem__(self, field):
         return self.fields[field]
 
     def __setitem__(self, key, value):
-        if hasattr(value, '__iter__'):
-            self.__dict__[key] = value[0]
-        else:
-            self.__dict__[key] = value
         self.fields[key] = value
 
     def __iter__(self):
         for field in self.fields:
             yield field
 
-class ListsDict(dict):
+class TokenDict(dict):
     def __init__(self, **kwargs):
         for key, value in kwargs.items():
             self.__setitem__(key, value)
             
     def __setitem__(self, key, value):
-        if value:
-            if hasattr(value, '__iter__'):
-                value = list(value)
-            else:
-                value = [value]
-            if key in self:
-                dict.__getitem__(self, key).extend(value)
-            else:
-                dict.__setitem__(self, key, value)
-        else: # leave a way to zero out the value for unstored fields
-            dict.__setitem__(self, key, None)
+        if hasattr(value, '__iter__'):
+            value = list(value)
+        else:
+            value = [value]
+        if key in self:
+            dict.__getitem__(self, key).extend(value)
+        else:
+            dict.__setitem__(self, key, value)
 
 def _test():
     import doctest

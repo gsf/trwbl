@@ -38,7 +38,8 @@ def search_index(query):
     index = Index('index')
     documents = index.search(query)
     for document in documents:
-        print "%s %s" % (document.title, document['keywords'])
+        print "%s %s" % (document['title'], document['keywords'])
+        print document.position
 
 def get_tokens(field):
     index = Index('index')
