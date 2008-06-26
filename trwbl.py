@@ -57,7 +57,7 @@ keywords
 Hoopdie McGee
 """
 
-import pickle
+import cPickle as pickle
 import re
 
 class IndexException(Exception):
