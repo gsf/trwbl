@@ -213,6 +213,9 @@ class Index(object):
                     self.weighted_fields.sort()
                     self.weighted_fields.reverse()
 
+# TODO: add update and delete methods -- should there be a 
+# Document.index method?
+
     def add(self, document):
         self.documents.append(document)
         document.position = len(self.documents) - 1
@@ -243,7 +246,7 @@ class Index(object):
     def open(self, filename):
         mc = self.get_mc()
         dumped_index = mc.get(filename)
-        if not dumped_index:
+        if dumped_index:
             self.load(dumped_index)
         else:
             index_handle = open(filename, 'rb')
