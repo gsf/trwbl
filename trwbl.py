@@ -59,6 +59,12 @@ Hoopdie McGee
 
 import cPickle as pickle
 import re
+try:
+    import memcache
+except ImportError:
+    pass
+
+MEMCACHE_LOCATION = '127.0.0.1:11211'
 
 class IndexException(Exception):
     pass
@@ -196,7 +202,7 @@ class Index(object):
     def __init__(self, filename=None, fields=None):
         if filename:
             self.open(filename)
-        else:
+        elif fields:
             self.documents = []
             self.fields = IndexFieldDict()
             self.weighted_fields = []
@@ -223,24 +229,38 @@ class Index(object):
                 document[field] = None  # can't delete during loop
 
     def dump(self):
-        return self.__dict__
+        return pickle.dumps(self.__dict__, -1)
 
     def load(self, dumped_index):
-        self.__dict__ = dumped_index
+        if self.__dict__:
+            raise IndexException, "Attempted load on established index."
+        self.__dict__ = pickle.loads(dumped_index)
+
+    def get_mc(self):
+        mc = memcache.Client([MEMCACHE_LOCATION], debug=0)
+        return mc
 
     def open(self, filename):
-        index_handle = open(filename, 'rb')
-        try:
-            self.load(pickle.load(index_handle))
-        finally:
-            index_handle.close()
+        mc = self.get_mc()
+        dumped_index = mc.get(filename)
+        if not dumped_index:
+            self.load(dumped_index)
+        else:
+            index_handle = open(filename, 'rb')
+            try:
+                self.load(index_handle.read())
+            finally:
+                index_handle.close()
     
     def save(self, filename):
+        dumped_index = self.dump()
         index_handle = open(filename, 'wb')
         try:
-            pickle.dump(self.dump(), index_handle, -1)
+            index_handle.write(dumped_index)
         finally:
             index_handle.close()
+        mc = self.get_mc()
+        mc.set(filename, dumped_index)
 
     def search(self, query):
         # TODO: handle quoted search and power searches

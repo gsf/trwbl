@@ -1,20 +1,20 @@
 import sys
 from glob import glob
-import cPickle as pickle
 
-from trwbl import Document, Field, Index, Tokenizer
+from trwbl import Document, Field, Index 
 import artsy
 
 def create_index():
-    index = Index(fields=(
-        Field('title', weight=0.8, copy_to='title_str'),
-        Field('title_str', store=False, weight=0.9, tokenizer=None),
-        Field('date', index=False),
-        Field('keywords', weight=0.7, copy_to='keywords_str'),
-        Field('keywords_str', tokenizer=None),
-        Field('description', weight=0.6),
-        Field('contents', store=False),
-    ))
+    #index = Index(fields=(
+    #    Field('title', weight=0.8, copy_to='title_s'),
+    #    Field('title_s', store=False, weight=0.9, tokenizer=None),
+    #    Field('date', index=False),
+    #    Field('keyword', weight=0.7, copy_to='keyword_s'),
+    #    Field('keyword_s', tokenizer=None),
+    #    Field('description', weight=0.6),
+    #    Field('content', store=False),
+    #))
+    index = Index('index')
     for article in glob('../art/*'):
         print "Adding %s ..." % article,
         file_handle = open(article)
@@ -24,19 +24,20 @@ def create_index():
         doc = Document(
             title=fields['title'],
             date=fields['date'],
-            keywords=[x.strip() for x in fields['keywords'].split(',')],
+            keyword=[x.strip() for x in fields['keywords'].split(',')],
             description=fields['description'],
-            contents=fields['contents'],
+            content=fields['contents'],
         )
         index.add(doc)
         print "done."
+    print len(index.documents)
     index.save('index')
     
 def search_index(query):
     index = Index('index')
     documents = index.search(query)
     for document in documents:
-        print "%s %s" % (document['title'], document['keywords'])
+        print "%s %s" % (document['title'], document['keyword'])
 
 def get_tokens(field):
     index = Index('index')
