@@ -20,35 +20,33 @@ of small documents.
 
 Example
 -------
->>> doc = Document(title='The Troll Mountain',
+>>> import trwbl
+>>> index = trwbl.Index()
+>>> index = Index(fields=(
+...     Field('title', weight=9),
+...     Field('author', weight=8),
+...     Field('keyword', weight=7, copy_to='keyword_str'),
+...     Field('keyword_str', weight=0, tokenizer=None),
+...     Field('content', store=False),
+... ))
+...
+>>> doc = trwbl.Document(
+... title='The Troll Mountain',
 ... author='Eleanor McGearyson',
-... keywords='Troll')
->>> len(d.fields)
-3
->>> for field in doc:
-...     if field.name == 'author':
-...          print '%s: %s' % (field.name, field.value)
+... keyword='Troll',
+... )
 ...
-author: Eleanor McGearyson
->>> doc2 = Document(title='Hoopdie McGee',
+>>> index.add(doc)
+>>> doc2 = Document(
+... title='Hoopdie McGee',
 ... author='Horrible Masterson',
-... keywords=('baby', 'soup'))
->>> doc2.tokenize()
->>> doc2.fields['keywords']['soup'][0].field
-1
->>> for field_name in doc2.fields:
-...     for token_value in doc2.fields[field_name]:
-...          if token_value == 'soup':
-...              print field_name
+... keyword=('baby', 'soup'),
+... )
 ...
-keywords
->>> indie = Index()
->>> indie.add(doc)
->>> indie.add(doc2)
->>> indie_dump = indie.dump()
->>> new_indie = Index()
->>> new_indie.load(indie_dump)
->>> doc_list = new_indie.search('baby', field='keywords')
+>>> index.add(doc2)
+>>> index.save('index')
+>>> index2 = Index('index')
+>>> result_set = index2.search('baby')
 >>> for doc in doc_list:
 ...     for field in doc:
 ...         if field.name == 'title':
@@ -134,14 +132,14 @@ class Field(object):
     """
     """
     def __init__(self, name, index=True, store=True, copy_to=None, 
-                weight=0.5, tokenizer=Tokenizer()):
+                weight=5, tokenizer=Tokenizer()):
         self.name = name
         self.index = index
         self.store = store
         self.copy_to = copy_to
         self.weight = weight
         self.tokenizer = tokenizer
-        self.tokens = TokenDict()
+        self.tokens = {}
 
     def __getitem__(self, key):
         return self.tokens[key]
@@ -164,25 +162,26 @@ class Field(object):
             else:
                 token_values = [field_value]
             for string_position, value in enumerate(token_values):
-                self.tokens[value] = TokenLocation(string_position, 
-                        field_position, document_position)
-
+                if value in self.tokens:
+                    docs = self.tokens[value]
+                    if document_position in docs:
+                        fields = docs[document_position]
+                        if field_position in fields:
+                            fields[field_position].append(string_position)
+                        else:
+                            fields[field_position] = [string_position]
+                    else:
+                        docs[document_position] = {field_position: 
+                                [string_position]}
+                else:
+                    self.tokens[value] = {document_position: {field_position: 
+                            [string_position]}}
+                        
     def get_token_list(self):
         """Get a list of tokens, sorted by popularity."""
         decorated_token_list = [(-len(self.tokens[x]), x) for x in self.tokens]
         decorated_token_list.sort()
         return [(x[1], self.tokens[x[1]]) for x in decorated_token_list]
-
-class TokenLocation(object):
-    """ """
-    def __init__(self, string, field, document):
-        # each of these are integer references to placement
-        self.string = string
-        self.field = field
-        self.document = document
-
-    def __str__(self):
-        return self.string
 
 class IndexFieldDict(dict):
     def __getitem__(self, field_name):
@@ -277,17 +276,21 @@ class Index(object):
             doc_list = []
             for weight, field_name in self.weighted_fields:
                 try:
-                    tokens = self.fields[field_name][query_token]
+                    token_docs = self.fields[field_name][query_token]
                 except KeyError:
-                    tokens = []
-                for token in tokens:
-                    doc_list.append(token.document)
+                    token_docs = []
+                for token_doc in token_docs:
+                    doc_list.append(token_doc)
             if doc_set:
                 doc_set = doc_set.intersection(doc_list)
             else:
                 doc_set = set(doc_list)
         documents = [self.documents[x] for x in doc_set]
         return documents
+
+class ResultSet(object):
+    def search(self, query):
+        query_parts = query.parse()
 
 class Document(object):
     """
@@ -316,7 +319,8 @@ class Document(object):
         for field in self.fields:
             yield field
 
-class TokenDict(dict):
+class ListsDict(dict):
+    """A dictionary that stores all values as lists."""
     def __init__(self, **kwargs):
         for key, value in kwargs.items():
             self.__setitem__(key, value)
@@ -346,16 +350,20 @@ if __name__ == "__main__":
 # hits on missing documents.  This might necessitate an optimize() method on 
 # the index.
 
-# for indexed fields across the index:
-# field name -- value -- doc, position (frequency to be added)
-#                     -- doc, position
-#                     -- doc, position
-#            -- value -- doc, position
-#                     -- doc, position
-# field name -- value -- doc, position
-#            -- value -- doc, position
-#                     -- doc, position
-
+# for tokens across the index:
+#
+#     field -- token -- doc_id -- field_id -- token_id
+#                                          -- token_id
+#                              -- field_id -- token_id
+#           -- token -- doc_id -- field_id -- token_id
+#                                          -- token_id
+#     field -- token -- doc_id -- field_id -- token_id
+#           -- token -- doc_id -- field_id -- token_id
+#                              -- field_id -- token_id
+# 
+# doc_id, field_id, and token_id refer to list indices for documents in the
+# index, fields of the same name in a document, and tokens in a field, 
+# respectively.
 
         # attempting to assign document IDs
 #        for field_name in document.fields:
