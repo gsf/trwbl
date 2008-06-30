@@ -2,22 +2,6 @@
 This is the trwbl library, for indexing and searching small numbers
 of small documents.
 
-    index = Index(fields=(
-        Field('title', copy_to='title_str'),
-        Field('title_str', tokenizer=Tokenizer(re_str='.+')),
-        Field('author'),
-        Field('content', store=False),
-    ))
-    document = Document(
-        title='Clearly Broken', 
-        author='Sally Bizurtz', 
-        content='I believe the world needs fixing.',
-    )
-    index.add(document)
-    index.save('index')
-    
-    documents = index.search('clearly')
-
 Example
 -------
 >>> import trwbl
@@ -60,7 +44,7 @@ import re
 try:
     import memcache
 except ImportError:
-    pass
+    memcache = None
 
 MEMCACHE_LOCATION = '127.0.0.1:11211'
 
@@ -68,21 +52,29 @@ class IndexException(Exception):
     pass
 
 QUERY_RE = re.compile(r"""
-(".+?")      # anything surrounded by quotes
-|            # or
-([+-]?)      # grab an optional + or -
-([\w]+):     # then a word, then a colon 
+"(.+?)(?:"|$)     # anything surrounded by quotes (or to end of line)
+|                 # or
+([+-]?)           # grab an optional + or -
+([\S]+):          # then non-whitespace, then a colon 
 (
-  ".+?"|     # then anything surrounded by quotes 
-  [\S]+      # or non-whitespace strings
-)|           # or
-([+-]?)      # grab an optional + or -
-([\S]+)      # and non-whitespace strings without colons
+  ".+?(?:"|$)|    # then anything surrounded by quotes 
+  \(.+?(?:\)|$)|  # or parentheses (or to end of line)
+  [\S]+           # or non-whitespace strings
+)|                # or
+([+-]?)           # grab an optional + or -
+([\S]+)           # and non-whitespace strings without colons
 """, re.VERBOSE | re.UNICODE)
 def parse_query(query):
-    parsed = QUERY_RE.findall(query)
-    for part in parsed:
-        phrase, field_op, field, field_query, word_op, word = part
+    return QUERY_RE.findall(query)
+
+FIELD_QUERY_RE = re.compile(r"""
+"(.+?)(?:"|$)     # anything surrounded by quotes (or to end of line)
+|                 # or
+([+-]?)           # grab an optional + or -
+([\S]+)           # and non-whitespace strings without colons
+""", re.VERBOSE | re.UNICODE)
+def parse_field_query(field_query):
+    return FIELD_QUERY_RE.findall(field_query)
 
 POWER_SEARCH_RE = re.compile(r"""
 ".+?"|         # ignore anything surrounded by quotes
@@ -94,19 +86,18 @@ POWER_SEARCH_RE = re.compile(r"""
   (?:
     ".+?"|     # then anything surrounded by quotes 
     \(.+?\)|   # or parentheses
-    \[.+?\]|   # or brackets,
     [\S]+      # or non-whitespace strings
   )
 )
 """, re.VERBOSE | re.UNICODE)
-def pull_power(query):
+def pull_field_queries(query):
     """
-    Pulls "power search" parts out of the query.  It returns
+    Pulls field query parts out of the query.  It returns
     (1) the query without those parts and (2) a list of those parts.
 
     >>> query = 'title:"tar baby" rabbit "the book:an adventure" -author:john'
     >>> pull_power(query)
-    (' "the book:an adventure" ', ['title:"tar baby"', '+author:john'])
+    (' rabbit "the book:an adventure" ', ['title:"tar baby"', '-author:john'])
     >>> 
     """
     power_list = POWER_SEARCH_RE.findall(query)
@@ -130,6 +121,20 @@ class Tokenizer(object):
 
 class Field(object):
     """
+    For tokens across the index:
+    
+        field -- token -- doc_id -- field_id -- token_id
+                                             -- token_id
+                                 -- field_id -- token_id
+              -- token -- doc_id -- field_id -- token_id
+                                             -- token_id
+        field -- token -- doc_id -- field_id -- token_id
+              -- token -- doc_id -- field_id -- token_id
+                                 -- field_id -- token_id
+    
+    doc_id, field_id, and token_id are integers that refer to list indices 
+    for documents in the index, fields of the same name in a document, and 
+    tokens in a field, respectively.
     """
     def __init__(self, name, index=True, store=True, copy_to=None, 
                 weight=5, tokenizer=Tokenizer()):
@@ -151,37 +156,96 @@ class Field(object):
     def __str__(self):
         return self.name
 
-    def add(self, field_value, document_position):
+    def add(self, field_value, document_id):
         if hasattr(field_value, '__iter__'):
             field_values = field_value
         else:
             field_values = [field_value]
-        for field_position, field_value in enumerate(field_values):
+        for field_id, field_value in enumerate(field_values):
             if self.tokenizer:
                 token_values = self.tokenizer.tokenize(field_value)
             else:
                 token_values = [field_value]
-            for string_position, value in enumerate(token_values):
+            for string_id, value in enumerate(token_values):
                 if value in self.tokens:
-                    docs = self.tokens[value]
-                    if document_position in docs:
-                        fields = docs[document_position]
-                        if field_position in fields:
-                            fields[field_position].append(string_position)
+                    document_ids = self.tokens[value]
+                    if document_id in document_ids:
+                        field_ids = document_ids[document_id]
+                        if field_id in field_ids:
+                            field_ids[field_id].append(string_id)
                         else:
-                            fields[field_position] = [string_position]
+                            field_ids[field_id] = [string_id]
                     else:
-                        docs[document_position] = {field_position: 
-                                [string_position]}
+                        document_ids[document_id] = {field_id: 
+                                [string_id]}
                 else:
-                    self.tokens[value] = {document_position: {field_position: 
-                            [string_position]}}
+                    self.tokens[value] = {document_id: {field_id: 
+                            [string_id]}}
                         
     def get_token_list(self):
         """Get a list of tokens, sorted by popularity."""
         decorated_token_list = [(-len(self.tokens[x]), x) for x in self.tokens]
         decorated_token_list.sort()
         return [(x[1], self.tokens[x[1]]) for x in decorated_token_list]
+
+class ResultSet(object):
+    def __init__(self, index, query):
+        # document_scores is a list of (score, document_id) tuples
+        self.document_scores = [(1, x) for x in index.documents]
+        # part_locations are the locations of the most recent query part
+        self.part_locations = {}
+        self.index = index
+        self.search(query)
+
+    def search(self, query):
+        query_parts = parse_query(query)
+        for part in query_parts:
+            phrase, field_op, field, field_query, word_op, word = part
+            if phrase:
+                self._phrase_search(phrase)
+            if field_query:
+                if field_query.startswith('('):
+                    field_query = field_query.strip('()')
+                field_query_parts = field_query_parse(field_query)
+                for fq_part in field_query_parts:
+                    self._field_search(fq_part, field, field_op)
+            if word:
+                self._word_search(word, word_op)
+        return self.populate()
+
+    def populate(self):
+        self.documents = []
+        self.document_scores.sort()
+        for score, document_id in self.document_scores:
+            self.documents.append(self.index.documents[document_id])
+        return self
+
+    def _field_search(self, field_query, field, field_op='+'):
+        pass
+
+    def _phrase_search(self, phrase):
+        pass
+
+    def _word_search(self, word, word_op='+'):
+        if word_op == '-':
+            negative = True
+        else:
+            negative = False
+        new_doc_scores = []
+        for weight, field_name in self.index.weighted_fields:
+            if word in self.index.fields[field_name]:
+                document_ids = self.index.fields[field_name][word]
+            else:
+                continue
+            if negative:
+                new_doc_scores = [x for x in self.document_scores if 
+                        x[1] not in document_ids]
+            else:
+                for document_score, document_id in self.document_scores:
+                    if document_id in document_ids:
+                        new_doc_score = 1
+                        new_doc_scores.append((new_doc_score, document_id))
+        self.document_scores = new_doc_scores
 
 class IndexFieldDict(dict):
     def __getitem__(self, field_name):
@@ -202,7 +266,8 @@ class Index(object):
         if filename:
             self.open(filename)
         elif fields:
-            self.documents = []
+            self.documents = {}
+            self.doc_counter = 0
             self.fields = IndexFieldDict()
             self.weighted_fields = []
             for field in fields:
@@ -216,17 +281,18 @@ class Index(object):
 # Document.index method?
 
     def add(self, document):
-        self.documents.append(document)
-        document.position = len(self.documents) - 1
+        document.id = self.doc_counter
+        self.doc_counter += 1
+        self.documents[document.id] = document
         for field in document:
             index_field = self.fields[field]
             field_value = document[field]
             if index_field.index:
-                index_field.add(field_value, document.position)
+                index_field.add(field_value, document.id)
             if index_field.copy_to:
                 copy_field = self.fields[index_field.copy_to]
                 if copy_field.index:  # really, when would it not be?
-                    copy_field.add(field_value, document.position)
+                    copy_field.add(field_value, document.id)
             if not self.fields[field].store:
                 document[field] = None  # can't delete during loop
 
@@ -268,46 +334,23 @@ class Index(object):
         # TODO: handle quoted search and power searches
         # TODO: score documents based on weighting, word proximity, and 
         #       frequency
-        powerless_query, power_search = pull_power(query)
-        tokenizer = Tokenizer()
-        query_tokens = tokenizer.tokenize(powerless_query)
-        doc_set = set()
-        for query_token in query_tokens:
-            doc_list = []
-            for weight, field_name in self.weighted_fields:
-                try:
-                    token_docs = self.fields[field_name][query_token]
-                except KeyError:
-                    token_docs = []
-                for token_doc in token_docs:
-                    doc_list.append(token_doc)
-            if doc_set:
-                doc_set = doc_set.intersection(doc_list)
-            else:
-                doc_set = set(doc_list)
-        documents = [self.documents[x] for x in doc_set]
-        return documents
-
-class ResultSet(object):
-    def search(self, query):
-        query_parts = query.parse()
+        return ResultSet(self, query)
 
 class Document(object):
     """
-    Fields are stored as a dictionary of lists.
+    A document is a dictionary of fields.  Use a list for fields with
+    more than one value.
 
     >>> d = Document(title='Born Sober', 
     ...         author=['Jake Mahoney', 'Sewell Littletrout'])
-    >>> d.title
+    >>> d['title']
     'Born Sober'
-    >>> d.author # only gets the first
-    'Jake Mahoney'
-    >>> d['author'] # gets them all
+    >>> d['author'] 
     ['Jake Mahoney', 'Sewell Littletrout']
     """
     def __init__(self, **kwargs):
-        self.fields = dict(**kwargs)
-        self.position = None
+        self.fields = kwargs
+        self.id = None
 
     def __getitem__(self, field):
         return self.fields[field]

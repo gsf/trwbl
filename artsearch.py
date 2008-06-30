@@ -33,9 +33,9 @@ def create_index():
     
 def search_index(query):
     index = Index('index')
-    documents = index.search(query)
-    for document in documents:
-        print "%s %s" % (document.position, document['title'])
+    results = index.search(query)
+    for document in results.documents:
+        print "%s %s" % (document.id, document['title'])
 
 def get_tokens(field):
     index = Index('index')
