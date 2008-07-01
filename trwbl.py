@@ -13,28 +13,23 @@ Example
 ...     Field('keyword_str', weight=0, tokenizer=None),
 ...     Field('content', store=False),
 ... ))
-...
 >>> doc = trwbl.Document(
 ... title='The Troll Mountain',
 ... author='Eleanor McGearyson',
 ... keyword='Troll',
 ... )
-...
 >>> index.add(doc)
 >>> doc2 = Document(
 ... title='Hoopdie McGee',
 ... author='Horrible Masterson',
 ... keyword=('baby', 'soup'),
 ... )
-...
 >>> index.add(doc2)
 >>> index.save('index')
 >>> index2 = Index('index')
->>> result_set = index2.search('baby')
->>> for doc in doc_list:
-...     for field in doc:
-...         if field.name == 'title':
-...             print field.value
+>>> results = index2.search('baby')
+>>> for doc in results.documents:
+...     print doc['title']
 ...
 Hoopdie McGee
 """
@@ -220,28 +215,28 @@ class ResultSet(object):
             self.documents.append(self.index.documents[document_id])
         return self
 
-    def _field_search(self, field_query, field, field_op='+'):
+    def _field_search(self, field_query, field, field_op=None):
         pass
 
     def _phrase_search(self, phrase):
         pass
 
-    def _word_search(self, word, word_op='+'):
-        if word_op == '-':
-            negative = True
-        else:
-            negative = False
+    def _word_search(self, word, word_op=None):
+        negative = False
+        if word_op:
+            if word_op == '-':
+                negative = True
+            elif word_op == '+':
+                pass  # could extend at some point
         found_docs = []
-        bad_docs = []
         for weight, field_name in self.index.weighted_fields:
             if word in self.index.fields[field_name]:
                 document_ids = self.index.fields[field_name][word]
             else:
                 continue
             if negative:
-                #self.document_scores = [x for x in self.document_scores if 
-                        #x[1] not in document_ids]
-                bad_docs.extend([x for x in document_ids]
+                self.document_scores = [x for x in self.document_scores if 
+                        x[1] not in document_ids]
             else:
                 for enum, score_id in enumerate(self.document_scores):
                     score, id = score_id
@@ -249,9 +244,9 @@ class ResultSet(object):
                         found_docs.append(id)
                         new_score = 1
                         self.document_scores[enum] = (new_score, id)
-            #print found_docs
-        self.document_scores = [x for x in self.document_scores if x[1]
-                in set(found_docs)]
+        if not negative:
+            self.document_scores = [x for x in self.document_scores if 
+                    x[1] in set(found_docs)]
 
 class IndexFieldDict(dict):
     def __getitem__(self, field_name):
