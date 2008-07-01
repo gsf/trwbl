@@ -1,5 +1,5 @@
 """
-This is the trwbl library, for indexing and searching small numbers
+This is the Trwbl library, for indexing and searching small numbers
 of small documents.
 
 Example
@@ -41,7 +41,7 @@ Hoopdie McGee
 
 import cPickle as pickle
 import re
-try:
+try:  # use memcache if we got it
     import memcache
 except ImportError:
     memcache = None
@@ -231,21 +231,27 @@ class ResultSet(object):
             negative = True
         else:
             negative = False
-        new_doc_scores = []
+        found_docs = []
+        bad_docs = []
         for weight, field_name in self.index.weighted_fields:
             if word in self.index.fields[field_name]:
                 document_ids = self.index.fields[field_name][word]
             else:
                 continue
             if negative:
-                new_doc_scores = [x for x in self.document_scores if 
-                        x[1] not in document_ids]
+                #self.document_scores = [x for x in self.document_scores if 
+                        #x[1] not in document_ids]
+                bad_docs.extend([x for x in document_ids]
             else:
-                for document_score, document_id in self.document_scores:
-                    if document_id in document_ids:
-                        new_doc_score = 1
-                        new_doc_scores.append((new_doc_score, document_id))
-        self.document_scores = new_doc_scores
+                for enum, score_id in enumerate(self.document_scores):
+                    score, id = score_id
+                    if id in document_ids:
+                        found_docs.append(id)
+                        new_score = 1
+                        self.document_scores[enum] = (new_score, id)
+            #print found_docs
+        self.document_scores = [x for x in self.document_scores if x[1]
+                in set(found_docs)]
 
 class IndexFieldDict(dict):
     def __getitem__(self, field_name):
@@ -305,7 +311,10 @@ class Index(object):
         self.__dict__ = pickle.loads(dumped_index)
 
     def get_mc(self):
-        mc = memcache.Client([MEMCACHE_LOCATION], debug=0)
+        if memcache:
+            mc = memcache.Client([MEMCACHE_LOCATION], debug=0)
+        else:
+            mc = {}
         return mc
 
     def open(self, filename):
@@ -328,7 +337,8 @@ class Index(object):
         finally:
             index_handle.close()
         mc = self.get_mc()
-        mc.set(filename, dumped_index)
+        if mc:
+            mc.set(filename, dumped_index)
 
     def search(self, query):
         # TODO: handle quoted search and power searches
