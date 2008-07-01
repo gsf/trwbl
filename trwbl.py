@@ -7,9 +7,9 @@ Example
 >>> import trwbl
 >>> index = trwbl.Index()
 >>> index = Index(fields=(
-...     Field('title', weight=9),
-...     Field('author', weight=8),
-...     Field('keyword', weight=7, copy_to='keyword_str'),
+...     Field('title', weight=0.9),
+...     Field('author', weight=0.8),
+...     Field('keyword', weight=0.7, copy_to='keyword_str'),
 ...     Field('keyword_str', weight=0, tokenizer=None),
 ...     Field('content', store=False),
 ... ))
@@ -42,6 +42,9 @@ except ImportError:
     memcache = None
 
 MEMCACHE_LOCATION = '127.0.0.1:11211'
+
+class FieldException(Exception):
+    pass
 
 class IndexException(Exception):
     pass
@@ -103,6 +106,10 @@ def pull_field_queries(query):
     powerless_query = re.sub('|'.join(escaped_power), '', query)
     return powerless_query, power_list
 
+def mean(numbers):
+    """Returns the arithmetic mean of a numeric list."""
+    return sum(numbers) / len(numbers)
+
 class Tokenizer(object):
     def __init__(self, lower=True, re_string=r'[\w\']+'):
         self.lower = lower
@@ -132,12 +139,16 @@ class Field(object):
     tokens in a field, respectively.
     """
     def __init__(self, name, index=True, store=True, copy_to=None, 
-                weight=5, tokenizer=Tokenizer()):
+                weight=0.5, tokenizer=Tokenizer()):
         self.name = name
         self.index = index
         self.store = store
         self.copy_to = copy_to
-        self.weight = weight
+        if 0 <= weight <= 1:
+            self.weight = weight
+        else:
+            raise FieldException, \
+            "Invalid weight: '%s'.  Weight must be between 0 and 1." % weight
         self.tokenizer = tokenizer
         self.tokens = {}
 
@@ -186,7 +197,7 @@ class Field(object):
 class ResultSet(object):
     def __init__(self, index, query):
         # document_scores is a list of (score, document_id) tuples
-        self.document_scores = [(1, x) for x in index.documents]
+        self.document_scores = [(0, x) for x in index.documents]
         # part_locations are the locations of the most recent query part
         self.part_locations = {}
         self.index = index
@@ -211,6 +222,7 @@ class ResultSet(object):
     def populate(self):
         self.documents = []
         self.document_scores.sort()
+        self.document_scores.reverse()
         for score, document_id in self.document_scores:
             self.documents.append(self.index.documents[document_id])
         return self
@@ -238,11 +250,19 @@ class ResultSet(object):
                 self.document_scores = [x for x in self.document_scores if 
                         x[1] not in document_ids]
             else:
+                self.part_locations = document_ids
                 for enum, score_id in enumerate(self.document_scores):
                     score, id = score_id
                     if id in document_ids:
                         found_docs.append(id)
-                        new_score = 1
+                        new_score = mean((score, weight))
+                        location_count = 0
+                        document = document_ids[id]
+                        for field in document:
+                            for location in document[field]:
+                                location_count += 1
+                        print location_count
+                        new_score = new_score * (1.01 ** location_count)
                         self.document_scores[enum] = (new_score, id)
         if not negative:
             self.document_scores = [x for x in self.document_scores if 
