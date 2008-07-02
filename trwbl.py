@@ -255,15 +255,14 @@ class ResultSet(object):
                     score, id = score_id
                     if id in document_ids:
                         found_docs.append(id)
-                        new_score = mean((score, weight))
                         location_count = 0
                         document = document_ids[id]
                         for field in document:
                             for location in document[field]:
                                 location_count += 1
-                        print location_count
-                        new_score = new_score * (1.01 ** location_count)
-                        self.document_scores[enum] = (new_score, id)
+                        modified_weight = weight + (0.001 * location_count)
+                        score += (1 - score) * modified_weight
+                        self.document_scores[enum] = (score, id)
         if not negative:
             self.document_scores = [x for x in self.document_scores if 
                     x[1] in set(found_docs)]
