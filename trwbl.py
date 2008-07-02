@@ -172,21 +172,19 @@ class Field(object):
                 token_values = self.tokenizer.tokenize(field_value)
             else:
                 token_values = [field_value]
-            for string_id, value in enumerate(token_values):
+            for token_id, value in enumerate(token_values):
                 if value in self.tokens:
                     document_ids = self.tokens[value]
                     if document_id in document_ids:
                         field_ids = document_ids[document_id]
                         if field_id in field_ids:
-                            field_ids[field_id].append(string_id)
+                            field_ids[field_id].append(token_id)
                         else:
-                            field_ids[field_id] = [string_id]
+                            field_ids[field_id] = [token_id]
                     else:
-                        document_ids[document_id] = {field_id: 
-                                [string_id]}
+                        document_ids[document_id] = {field_id: [token_id]}
                 else:
-                    self.tokens[value] = {document_id: {field_id: 
-                            [string_id]}}
+                    self.tokens[value] = {document_id: {field_id: [token_id]}}
                         
     def get_token_list(self):
         """Get a list of tokens, sorted by popularity."""
@@ -199,7 +197,7 @@ class ResultSet(object):
         # document_scores is a list of (score, document_id) tuples
         self.document_scores = [(0, x) for x in index.documents]
         # part_locations are the locations of the most recent query part
-        self.part_locations = {}
+        self.previous_locations = {}
         self.index = index
         self.search(query)
 
@@ -224,7 +222,9 @@ class ResultSet(object):
         self.document_scores.sort()
         self.document_scores.reverse()
         for score, document_id in self.document_scores:
-            self.documents.append(self.index.documents[document_id])
+            document = self.index.documents[document_id]
+            document.score = score
+            self.documents.append(document)
         return self
 
     def _field_search(self, field_query, field, field_op=None):
@@ -234,6 +234,7 @@ class ResultSet(object):
         pass
 
     def _word_search(self, word, word_op=None):
+        part_locations = {}
         negative = False
         if word_op:
             if word_op == '-':
@@ -242,6 +243,7 @@ class ResultSet(object):
                 pass  # could extend at some point
         found_docs = []
         for weight, field_name in self.index.weighted_fields:
+            #print field_name
             if word in self.index.fields[field_name]:
                 document_ids = self.index.fields[field_name][word]
             else:
@@ -250,22 +252,48 @@ class ResultSet(object):
                 self.document_scores = [x for x in self.document_scores if 
                         x[1] not in document_ids]
             else:
-                self.part_locations = document_ids
                 for enum, score_id in enumerate(self.document_scores):
                     score, id = score_id
                     if id in document_ids:
                         found_docs.append(id)
-                        location_count = 0
                         document = document_ids[id]
-                        for field in document:
-                            for location in document[field]:
-                                location_count += 1
-                        modified_weight = weight + (0.001 * location_count)
+                        #print "{%s: %s}" % (id, document)
+                        if field_name in part_locations:
+                            part_locations[field_name][id] = document
+                        else:
+                            part_locations[field_name] = {id: document}
+                        distances = self._get_distances(field_name, id, 
+                                document)
+                        weight_mod = [1]
+                        for distance in distances:
+                            if distance == 1:
+                                distance = distance / 4.0
+                            elif 1 < distance < 5:
+                                distance = distance / 2.0
+                            elif distance < 0:
+                                distance = -distance
+                            weight_mod.append(0.01 / distance)
+                        modified_weight = weight * sum(weight_mod)
                         score += (1 - score) * modified_weight
                         self.document_scores[enum] = (score, id)
         if not negative:
             self.document_scores = [x for x in self.document_scores if 
                     x[1] in set(found_docs)]
+        self.previous_locations = part_locations
+
+    def _get_distances(self, field_name, id, document):
+        distances = []
+        # this is some deep nesting
+        if field_name in self.previous_locations:
+            previous_doc_ids = self.previous_locations[field_name]
+            if id in previous_doc_ids:
+                prev_doc = previous_doc_ids[id]
+                for field_id in document:
+                    if field_id in prev_doc:
+                        for token_id in document[field_id]:
+                            for prev_token_id in prev_doc[field_id]:
+                                distances.append(token_id - prev_token_id)
+        return distances
 
 class IndexFieldDict(dict):
     def __getitem__(self, field_name):
@@ -375,6 +403,7 @@ class Document(object):
     def __init__(self, **kwargs):
         self.fields = kwargs
         self.id = None
+        self.score = None
 
     def __getitem__(self, field):
         return self.fields[field]
