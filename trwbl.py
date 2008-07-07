@@ -8,8 +8,8 @@ Example
 >>> index = trwbl.Index()
 >>> index = Index(fields=(
 ...     Field('title', weight=0.9),
-...     Field('author', weight=0.8),
-...     Field('keyword', weight=0.7, copy_to='keyword_str'),
+...     Field('author', weight=0.6),
+...     Field('keyword', weight=0.5, copy_to='keyword_str'),
 ...     Field('keyword_str', weight=0, tokenizer=None),
 ...     Field('content', store=False),
 ... ))
@@ -69,46 +69,10 @@ FIELD_QUERY_RE = re.compile(r"""
 "(.+?)(?:"|$)     # anything surrounded by quotes (or to end of line)
 |                 # or
 ([+-]?)           # grab an optional + or -
-([\S]+)           # and non-whitespace strings without colons
+([\S]+)           # and non-whitespace strings
 """, re.VERBOSE | re.UNICODE)
 def parse_field_query(field_query):
     return FIELD_QUERY_RE.findall(field_query)
-
-POWER_SEARCH_RE = re.compile(r"""
-".+?"|         # ignore anything surrounded by quotes
-(
-  (?:
-    [+-]?      # grab an optional + or -
-    [\w]+:     # then a word with a colon
-  )
-  (?:
-    ".+?"|     # then anything surrounded by quotes 
-    \(.+?\)|   # or parentheses
-    [\S]+      # or non-whitespace strings
-  )
-)
-""", re.VERBOSE | re.UNICODE)
-def pull_field_queries(query):
-    """
-    Pulls field query parts out of the query.  It returns
-    (1) the query without those parts and (2) a list of those parts.
-
-    >>> query = 'title:"tar baby" rabbit "the book:an adventure" -author:john'
-    >>> pull_power(query)
-    (' rabbit "the book:an adventure" ', ['title:"tar baby"', '-author:john'])
-    >>> 
-    """
-    power_list = POWER_SEARCH_RE.findall(query)
-    # drop empty strings
-    power_list = [x for x in power_list if x] 
-    # escape for re
-    escaped_power = [re.escape(x) for x in power_list]
-    powerless_query = re.sub('|'.join(escaped_power), '', query)
-    return powerless_query, power_list
-
-def mean(numbers):
-    """Returns the arithmetic mean of a numeric list."""
-    return sum(numbers) / len(numbers)
 
 class Tokenizer(object):
     def __init__(self, lower=True, re_string=r'[\w\']+'):
@@ -120,6 +84,10 @@ class Tokenizer(object):
         if self.lower:
             tokens = [x.lower() for x in tokens]
         return tokens
+
+class TokenizerNot(object):
+    def tokenize(self, value):
+        return [value]
 
 class Field(object):
     """
@@ -139,7 +107,7 @@ class Field(object):
     tokens in a field, respectively.
     """
     def __init__(self, name, index=True, store=True, copy_to=None, 
-                weight=0.5, tokenizer=Tokenizer()):
+                weight=0.1, tokenizer=Tokenizer()):
         self.name = name
         self.index = index
         self.store = store
@@ -149,7 +117,10 @@ class Field(object):
         else:
             raise FieldException, \
             "Invalid weight: '%s'.  Weight must be between 0 and 1." % weight
-        self.tokenizer = tokenizer
+        if tokenizer:
+            self.tokenizer = tokenizer
+        else:
+            self.tokenizer = TokenizerNot()
         self.tokens = {}
 
     def __getitem__(self, key):
@@ -168,10 +139,7 @@ class Field(object):
         else:
             field_values = [field_value]
         for field_id, field_value in enumerate(field_values):
-            if self.tokenizer:
-                token_values = self.tokenizer.tokenize(field_value)
-            else:
-                token_values = [field_value]
+            token_values = self.tokenizer.tokenize(field_value)
             for token_id, value in enumerate(token_values):
                 if value in self.tokens:
                     document_ids = self.tokens[value]
@@ -234,36 +202,51 @@ class ResultSet(object):
         pass
 
     def _word_search(self, word, word_op=None):
-        part_locations = {}
         negative = False
         if word_op:
             if word_op == '-':
                 negative = True
             elif word_op == '+':
                 pass  # could extend at some point
+        word_locations = {}
         found_docs = []
         for weight, field_name in self.index.weighted_fields:
             #print field_name
-            if word in self.index.fields[field_name]:
-                document_ids = self.index.fields[field_name][word]
-            else:
-                continue
+            index_field = self.index.fields[field_name]
+            tokens = index_field.tokenizer.tokenize(word)
+            #print tokens
+            document_ids = []
+            locations = None
+            previous_locations = None
+            # for each token, only keep locations that are a distance of 1 from
+            # a previous location
+            for enum, token in enumerate(tokens):
+                if token in index_field:
+                    locations = index_field[token]
+                else:
+                    continue
+                if previous_locations:
+                    self._keep_consecutive(previous_locations, locations)
+            word_locations = locations
             if negative:
                 self.document_scores = [x for x in self.document_scores if 
                         x[1] not in document_ids]
             else:
+                distances = self._get_distances(
+                        self.previous_locations[field_name], document_ids)
                 for enum, score_id in enumerate(self.document_scores):
                     score, id = score_id
                     if id in document_ids:
                         found_docs.append(id)
                         document = document_ids[id]
                         #print "{%s: %s}" % (id, document)
-                        if field_name in part_locations:
-                            part_locations[field_name][id] = document
+                        if field_name in locations:
+                            locations[field_name][id] = document
                         else:
-                            part_locations[field_name] = {id: document}
-                        distances = self._get_distances(field_name, id, 
-                                document)
+                            locations[field_name] = {id: document}
+                        distances = self._get_distances(
+                            self.previous_locations[field_name], 
+                            {id: document})
                         weight_mod = [1]
                         for distance in distances:
                             if distance == 1:
@@ -279,20 +262,74 @@ class ResultSet(object):
         if not negative:
             self.document_scores = [x for x in self.document_scores if 
                     x[1] in set(found_docs)]
-        self.previous_locations = part_locations
+        self.previous_locations = locations
 
-    def _get_distances(self, field_name, id, document):
+    def _get_consecutive_locations(self, previous_locations, locations):
+        # e.g., locations = {1: {4: [0]}, 21: {0: [0, 24]}, 29: {4: [1]}}
+        # This is some deep nesting.  Is there another way?
+        consecutive_locations = {}
+        for doc_id in locations:
+            if doc_id in previous_locations:
+                previous_field_ids = previous_locations[doc_id]
+                field_ids = locations[doc_id]
+                for field_id in field_ids:
+                    if field_id in previous_field_ids:
+                        token_ids = field_ids[field_id]
+                        previous_token_ids = previous_field_ids[field_id]
+                        for token_id in token_ids:
+                            for previous_token_id in previous_token_ids:
+                                if previous_token_id + 1 == token_id:
+                                    self._add_location((doc_id, field_id, 
+                                            token_id), consecutive_locations)
+
+    def _get_consecutive(self, previous_locations, locations):
+        consecutive_locations = {}
+        for doc_id in previous_locations:
+            field_ids = previous_locations[doc_id]
+            for field_id in field_ids:
+                token_ids = doc[field_id]
+                for token_id in token_ids:
+                    plus_one = token_id + 1
+                    if plus_one in locations[doc_id][field_id]
+                        self._add_location((doc_id, field_id, token_id),
+                                consecutive_locations)
+        return consecutive_locations
+
+    def _add_location(self, location_tuple, location_dict):
+        doc_id, field_id, token_id = location_tuple
+        if doc_id in location_dict:
+            field_ids = location_dict[doc_id]
+            if field_id in field_ids:
+                field_ids[field_id].append(token_id)
+            else:
+                field_ids[field_id] = [token_id]
+        else:
+            location_dict[doc_id] = {field_id: [token_id]}
+                
+    def _get_distances(self, previous_locations, locations):
+        # e.g., locations = {1: {4: [0]}, 21: {4: [0]}, 29: {4: [1]}}
         distances = []
-        # this is some deep nesting
-        if field_name in self.previous_locations:
-            previous_doc_ids = self.previous_locations[field_name]
-            if id in previous_doc_ids:
-                prev_doc = previous_doc_ids[id]
-                for field_id in document:
-                    if field_id in prev_doc:
-                        for token_id in document[field_id]:
-                            for prev_token_id in prev_doc[field_id]:
-                                distances.append(token_id - prev_token_id)
+        # This is some deep nesting.  Is there another way?
+        for doc_id in locations:
+            if doc_id in previous_locations:
+                previous_field_ids = previous_locations[doc_id]
+                field_ids = locations[doc_id]
+                for field_id in field_ids:
+                    if field_id in previous_field_ids:
+                        token_ids = field_ids[field_id]
+                        previous_token_ids = previous_field_ids[field_id]
+                        for token_id in token_ids:
+                            for previous_token_id in previous_token_ids:
+                                distances.append(token_id - previous_token_id)
+#        if field_name in locations1:
+#            doc_ids1 = locations1[field_name]
+#            if id in previous_doc_ids:
+#                prev_doc = previous_doc_ids[id]
+#                for field_id in document:
+#                    if field_id in prev_doc:
+#                        for token_id in document[field_id]:
+#                            for prev_token_id in prev_doc[field_id]:
+#                                distances.append(token_id - prev_token_id)
         return distances
 
 class IndexFieldDict(dict):
