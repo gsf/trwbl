@@ -86,8 +86,84 @@ class Tokenizer(object):
         return tokens
 
 class TokenizerNot(object):
+    """A non-tokenizing tokenizer."""
     def tokenize(self, value):
         return [value]
+
+class TokenLocations(dict):
+    """
+    TokenLocations is a dictionary of dictionaries of lists.  The keys for 
+    the outer dictionary are document IDs.  The keys for the inner 
+    dictionaries are field IDs (for multiple fields with the same name in a 
+    document).  The lists are token IDs, pointing to the position of each
+    token in a field.
+    """
+    def add_location(self, doc_id, field_id, token_id):
+        if doc_id in self:
+            field_ids = self[doc_id]
+            if field_id in field_ids:
+                field_ids[field_id].append(token_id)
+            else:
+                field_ids[field_id] = [token_id]
+        else:
+            self[doc_id] = {field_id: [token_id]}
+        
+    def _map_locations(self, function, other_locations):
+        locations = TokenLocations()
+        for doc_id in self:
+            if doc_id in previous_locations:
+                previous_field_ids = previous_locations[doc_id]
+                field_ids = self[doc_id]
+                for field_id in field_ids:
+                    if field_id in previous_field_ids:
+                        token_ids = field_ids[field_id]
+                        previous_token_ids = previous_field_ids[field_id]
+                        for token_id in token_ids:
+                            for previous_token_id in previous_token_ids:
+                                output = function(token_id, previous_token_id)
+                                if output:
+                                    locations.append(output)
+        return locations
+
+    def get_consecutive(self, previous_locations):
+        """
+        Returns a TokenLocations instance of locations from self that are 
+        consecutive to locations in previous_locations.  Used for phrase 
+        and complex word searches.
+        """
+        consecutive_locations = TokenLocations()
+        for doc_id in self:
+            if doc_id in previous_locations:
+                field_ids = self[doc_id]
+                previous_field_ids = previous_locations[doc_id]
+                for field_id in field_ids:
+                    if field_id in previous_field_ids:
+                        token_ids = field_ids[field_id]
+                        previous_token_ids = previous_field_ids[field_id]
+                        for token_id in token_ids:
+                            if token_id in previous_token_ids:
+                                consecutive_locations.add_location(doc_id, 
+                                        field_id, token_id)
+        return consecutive_locations
+
+    def get_distances(self, previous_locations):
+        """
+        Returns a list of integer distances from each location in 
+        previous_locations to each location in self.
+        """
+        distances = []
+        for doc_id in self:
+            if doc_id in previous_locations:
+                field_ids = self[doc_id]
+                previous_field_ids = previous_locations[doc_id]
+                for field_id in field_ids:
+                    if field_id in previous_field_ids:
+                        token_ids = field_ids[field_id]
+                        previous_token_ids = previous_field_ids[field_id]
+                        for token_id in token_ids:
+                            for previous_token_id in previous_token_ids:
+                                distances.append(token_id - previous_token_id)
+        return distances
 
 class Field(object):
     """
@@ -226,11 +302,12 @@ class ResultSet(object):
                 else:
                     continue
                 if previous_locations:
-                    self._keep_consecutive(previous_locations, locations)
+                    locations = locations.get_consecutive(previous_locations)
+                previous_locations = locations
             word_locations = locations
             if negative:
                 self.document_scores = [x for x in self.document_scores if 
-                        x[1] not in document_ids]
+                        x[1] not in locations]
             else:
                 distances = self._get_distances(
                         self.previous_locations[field_name], document_ids)
@@ -263,74 +340,6 @@ class ResultSet(object):
             self.document_scores = [x for x in self.document_scores if 
                     x[1] in set(found_docs)]
         self.previous_locations = locations
-
-    def _get_consecutive_locations(self, previous_locations, locations):
-        # e.g., locations = {1: {4: [0]}, 21: {0: [0, 24]}, 29: {4: [1]}}
-        # This is some deep nesting.  Is there another way?
-        consecutive_locations = {}
-        for doc_id in locations:
-            if doc_id in previous_locations:
-                previous_field_ids = previous_locations[doc_id]
-                field_ids = locations[doc_id]
-                for field_id in field_ids:
-                    if field_id in previous_field_ids:
-                        token_ids = field_ids[field_id]
-                        previous_token_ids = previous_field_ids[field_id]
-                        for token_id in token_ids:
-                            for previous_token_id in previous_token_ids:
-                                if previous_token_id + 1 == token_id:
-                                    self._add_location((doc_id, field_id, 
-                                            token_id), consecutive_locations)
-
-    def _get_consecutive(self, previous_locations, locations):
-        consecutive_locations = {}
-        for doc_id in previous_locations:
-            field_ids = previous_locations[doc_id]
-            for field_id in field_ids:
-                token_ids = doc[field_id]
-                for token_id in token_ids:
-                    plus_one = token_id + 1
-                    if plus_one in locations[doc_id][field_id]
-                        self._add_location((doc_id, field_id, token_id),
-                                consecutive_locations)
-        return consecutive_locations
-
-    def _add_location(self, location_tuple, location_dict):
-        doc_id, field_id, token_id = location_tuple
-        if doc_id in location_dict:
-            field_ids = location_dict[doc_id]
-            if field_id in field_ids:
-                field_ids[field_id].append(token_id)
-            else:
-                field_ids[field_id] = [token_id]
-        else:
-            location_dict[doc_id] = {field_id: [token_id]}
-                
-    def _get_distances(self, previous_locations, locations):
-        # e.g., locations = {1: {4: [0]}, 21: {4: [0]}, 29: {4: [1]}}
-        distances = []
-        # This is some deep nesting.  Is there another way?
-        for doc_id in locations:
-            if doc_id in previous_locations:
-                previous_field_ids = previous_locations[doc_id]
-                field_ids = locations[doc_id]
-                for field_id in field_ids:
-                    if field_id in previous_field_ids:
-                        token_ids = field_ids[field_id]
-                        previous_token_ids = previous_field_ids[field_id]
-                        for token_id in token_ids:
-                            for previous_token_id in previous_token_ids:
-                                distances.append(token_id - previous_token_id)
-#        if field_name in locations1:
-#            doc_ids1 = locations1[field_name]
-#            if id in previous_doc_ids:
-#                prev_doc = previous_doc_ids[id]
-#                for field_id in document:
-#                    if field_id in prev_doc:
-#                        for token_id in document[field_id]:
-#                            for prev_token_id in prev_doc[field_id]:
-#                                distances.append(token_id - prev_token_id)
-        return distances
 
 class IndexFieldDict(dict):
     def __getitem__(self, field_name):
