@@ -36,6 +36,7 @@ Hoopdie McGee
 
 import cPickle as pickle
 import re
+
 try:  # use memcache if we got it
     import memcache
 except ImportError:
@@ -108,22 +109,30 @@ class TokenLocations(dict):
         else:
             self[doc_id] = {field_id: [token_id]}
         
-    def _map_locations(self, function, other_locations):
-        locations = TokenLocations()
+    def compare(self, previous_locations, proximity_range=1):
+        """
+        Returns close_locations and a list of all distances between 
+        compared locations.  Each location in close_locations is within 
+        the proximity_range of a previous location.
+        """
+        close_locations = TokenLocations()
+        distances = []
         for doc_id in self:
             if doc_id in previous_locations:
-                previous_field_ids = previous_locations[doc_id]
                 field_ids = self[doc_id]
+                previous_field_ids = previous_locations[doc_id]
                 for field_id in field_ids:
                     if field_id in previous_field_ids:
                         token_ids = field_ids[field_id]
                         previous_token_ids = previous_field_ids[field_id]
                         for token_id in token_ids:
                             for previous_token_id in previous_token_ids:
-                                output = function(token_id, previous_token_id)
-                                if output:
-                                    locations.append(output)
-        return locations
+                                distance = token_id - previous_token_id
+                                if distance <= proximity_range:
+                                    close_locations.add_location(doc_id, 
+                                            field_id, token_id)
+                                distances.append(distance)
+        return close_locations, distances
 
     def get_consecutive(self, previous_locations):
         """
